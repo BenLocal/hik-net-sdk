@@ -1,0 +1,2 @@
+[env]
+HIK_SDK_PATH = { value = "sdk/linux64", relative = true }

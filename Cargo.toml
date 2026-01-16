@@ -1,0 +1,10 @@
+[package]
+name = "hik-net-sdk"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.98"
+
+[build-dependencies]
+bindgen = "0.72.1"
