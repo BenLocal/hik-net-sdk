@@ -182,6 +182,85 @@
         .hidden {
             display: none;
         }
+
+        /* 视频播放模态框样式 */
+        .video-modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.8);
+            justify-content: center;
+            align-items: center;
+        }
+
+        .video-modal.show {
+            display: flex;
+        }
+
+        .video-modal-content {
+            background-color: #1a1a1a;
+            border-radius: 10px;
+            padding: 20px;
+            max-width: 90%;
+            max-height: 90%;
+            width: 1200px;
+            position: relative;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+        }
+
+        .video-modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+            color: #fff;
+        }
+
+        .video-modal-title {
+            font-size: 1.2em;
+            font-weight: 500;
+        }
+
+        .video-modal-close {
+            background: #dc3545;
+            color: white;
+            border: none;
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            cursor: pointer;
+            font-size: 18px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: background 0.3s;
+        }
+
+        .video-modal-close:hover {
+            background: #c82333;
+        }
+
+        .video-modal-body {
+            position: relative;
+        }
+
+        .video-modal-body video {
+            width: 100%;
+            height: auto;
+            background: #000;
+            border-radius: 8px;
+        }
+
+        .video-loading {
+            color: #fff;
+            text-align: center;
+            padding: 20px;
+            display: block;
+        }
     </style>
 </head>
 
@@ -254,7 +333,26 @@
                     <input type="text" id="endTime" placeholder="2024-01-01 23:59:59">
                 </div>
             </div>
-            <button onclick="downloadRecording()">开始下载</button>
+            <div style="display: flex; gap: 10px;">
+                <button onclick="downloadRecording()">开始下载</button>
+                <button onclick="playRecording()" class="btn-secondary">开始播放</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 视频播放模态框 -->
+    <div id="videoModal" class="video-modal">
+        <div class="video-modal-content">
+            <div class="video-modal-header">
+                <div class="video-modal-title" id="videoModalTitle">视频播放</div>
+                <button class="video-modal-close" onclick="closeVideoModal()">&times;</button>
+            </div>
+            <div class="video-modal-body">
+                <div class="video-loading" id="videoLoading">正在加载视频...</div>
+                <video id="videoPlayer" controls autoplay preload="auto" style="display: none;">
+                    您的浏览器不支持视频播放
+                </video>
+            </div>
         </div>
     </div>
 
@@ -326,12 +424,13 @@
             channels.forEach(channel => {
                 const card = document.createElement('div');
                 card.className = `channel-card ${channel.enabled ? 'enabled' : 'disabled'}`;
-                card.innerHTML = `
-                    <div class="channel-number">通道 ${channel.channel_num}</div>
-                    <div class="channel-type">类型: ${channel.channel_type}</div>
-                    ${channel.ipv4_address ? `<div class="channel-type">IP: ${channel.ipv4_address}</div>` : ''}
-                    <div class="channel-type">状态: ${channel.enabled ? '启用' : '禁用'}</div>
-                `;
+                const ipAddressHtml = channel.ipv4_address
+                    ? '<div class="channel-type">IP: ' + channel.ipv4_address + '</div>'
+                    : '';
+                card.innerHTML = '<div class="channel-number">通道 ' + channel.channel_num + '</div>' +
+                    '<div class="channel-type">类型: ' + channel.channel_type + '</div>' +
+                    ipAddressHtml +
+                    '<div class="channel-type">状态: ' + (channel.enabled ? '启用' : '禁用') + '</div>';
                 card.onclick = () => {
                     document.getElementById('imageChannel').value = channel.channel_num;
                     document.getElementById('downloadChannel').value = channel.channel_num;
@@ -416,14 +515,144 @@
             }
         }
 
+        async function playRecording() {
+            if (!sessionId) {
+                showMessage('downloadMessage', '请先登录', 'error');
+                return;
+            }
+
+            const channel = parseInt(document.getElementById('downloadChannel').value);
+            const startTime = document.getElementById('startTime').value;
+            const endTime = document.getElementById('endTime').value;
+
+            if (!channel || !startTime || !endTime) {
+                showMessage('downloadMessage', '请填写所有字段', 'error');
+                return;
+            }
+
+            try {
+                showMessage('downloadMessage', '正在下载视频，请稍候...', 'success');
+
+                const response = await fetch(`/api/download?session_id=${sessionId}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ channel, start_time: startTime, end_time: endTime })
+                });
+
+                const data = await response.json();
+
+                if (data.success && data.download_id) {
+                    // 等待下载完成（轮询检查文件是否存在）
+                    const filename = data.download_id;
+                    let attempts = 0;
+                    const maxAttempts = 120; // 最多等待60秒（每500ms检查一次）
+
+                    const checkFile = async () => {
+                        try {
+                            // 使用 GET 请求检查文件是否存在（HEAD 可能不被支持）
+                            const checkResponse = await fetch(`/play/${filename}`, {
+                                method: 'GET',
+                                headers: { 'Range': 'bytes=0-1' } // 只请求前2个字节来检查文件
+                            });
+
+                            if (checkResponse.ok || checkResponse.status === 206) {
+                                // 文件已准备好，显示模态框
+                                showVideoModal(filename);
+                                showMessage('downloadMessage', '视频已准备好，正在播放', 'success');
+                            } else if (attempts < maxAttempts) {
+                                attempts++;
+                                setTimeout(checkFile, 500);
+                            } else {
+                                showMessage('downloadMessage', '下载超时，请稍后重试', 'error');
+                            }
+                        } catch (error) {
+                            if (attempts < maxAttempts) {
+                                attempts++;
+                                setTimeout(checkFile, 500);
+                            } else {
+                                showMessage('downloadMessage', '检查文件状态失败: ' + error.message, 'error');
+                            }
+                        }
+                    };
+
+                    // 延迟3秒后开始检查（给下载一些时间）
+                    setTimeout(checkFile, 3000);
+                } else {
+                    showMessage('downloadMessage', data.message || '下载失败', 'error');
+                }
+            } catch (error) {
+                showMessage('downloadMessage', '下载失败: ' + error.message, 'error');
+            }
+        }
+
+        function showVideoModal(filename) {
+            const modal = document.getElementById('videoModal');
+            const videoPlayer = document.getElementById('videoPlayer');
+            const videoLoading = document.getElementById('videoLoading');
+            const videoTitle = document.getElementById('videoModalTitle');
+
+            videoTitle.textContent = '视频播放 - ' + filename;
+            videoPlayer.style.display = 'none';
+            videoLoading.style.display = 'block';
+            videoLoading.textContent = '正在加载视频...';
+            videoLoading.style.color = '#fff';
+            videoPlayer.src = '';
+            videoPlayer.innerHTML = '<source src="/play/' + filename + '" type="video/mp4">' +
+                '<source src="/play/' + filename + '" type="video/x-msvideo">';
+            modal.classList.add('show');
+
+            videoPlayer.onloadeddata = function () {
+                videoLoading.style.display = 'none';
+                videoPlayer.style.display = 'block';
+            };
+
+            videoPlayer.onerror = function () {
+                videoLoading.textContent = '视频加载失败，请检查文件格式或稍后重试';
+                videoLoading.style.color = '#ff4444';
+            };
+
+            videoPlayer.load();
+        }
+
+        function closeVideoModal() {
+            const modal = document.getElementById('videoModal');
+            const videoPlayer = document.getElementById('videoPlayer');
+            videoPlayer.pause();
+            videoPlayer.src = '';
+            modal.classList.remove('show');
+        }
+
+        function initVideoModal() {
+            const modal = document.getElementById('videoModal');
+            if (modal) {
+                modal.addEventListener('click', function (e) {
+                    if (e.target === modal) {
+                        closeVideoModal();
+                    }
+                });
+                document.addEventListener('keydown', function (e) {
+                    if (e.key === 'Escape' && modal.classList.contains('show')) {
+                        closeVideoModal();
+                    }
+                });
+            }
+        }
+
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', initVideoModal);
+        } else {
+            initVideoModal();
+        }
+
         function showMessage(elementId, message, type) {
             const element = document.getElementById(elementId);
-            element.innerHTML = `<div class="message ${type}">${message}</div>`;
-            setTimeout(() => {
+            element.innerHTML = '<div class="message ' + type + '">' + message + '</div>';
+            setTimeout(function () {
                 element.innerHTML = '';
             }, 5000);
-        }
-    </script>
+        } </script>
 </body>
 
 </html>

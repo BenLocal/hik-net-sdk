@@ -7,7 +7,10 @@ use axum::{
     Router,
 };
 use chrono::{Local, NaiveDateTime, TimeZone};
-use hik_net_sdk::device::{Channel, HikDevice};
+use hik_net_sdk::{
+    common,
+    device::{Channel, HikDevice},
+};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -125,7 +128,7 @@ struct DownloadResponse {
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> anyhow::Result<()> {
     // 创建图片存储目录
     let images_dir = PathBuf::from("images");
     if !images_dir.exists() {
@@ -137,19 +140,25 @@ async fn main() {
         images_dir,
     };
 
+    // init
+    common::init()?;
+
     let app = Router::new()
         .route("/", get(index))
         .route("/api/login", post(login))
         .route("/api/channels", get(get_channels))
         .route("/api/capture", post(capture_image))
         .route("/api/download", post(download_recording))
-        .route("/images/:filename", get(get_image))
-        .route("/recordings/:filename", get(get_recording))
+        .route("/images/{filename}", get(get_image))
+        .route("/recordings/{filename}", get(get_recording))
+        .route("/play/{filename}", get(play_recording))
         .with_state(app_state);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
     println!("Server running on http://0.0.0.0:3000");
-    axum::serve(listener, app).await.unwrap();
+    axum::serve(listener, app).await?;
+
+    Ok(())
 }
 
 async fn index() -> Html<&'static str> {
@@ -296,8 +305,16 @@ async fn download_recording(
         }
     };
 
+    // 从 session_id 中提取设备 IP（格式：{host}_{port}）
+    let device_ip = session_id
+        .split('_')
+        .next()
+        .unwrap_or("unknown")
+        .replace('.', "_");
+
     let filename = format!(
-        "recording_ch{}_{}_{}.dav",
+        "recording_{}_ch{}_{}_{}.mp4",
+        device_ip,
         req.channel,
         start_time.format("%Y%m%d_%H%M%S"),
         end_time.format("%Y%m%d_%H%M%S")
@@ -378,6 +395,32 @@ async fn get_recording(Path(filename): Path<String>) -> Result<Response, AppErro
         axum::http::header::CONTENT_DISPOSITION,
         HeaderValue::from_str(&format!("attachment; filename=\"{}\"", filename))?,
     );
+
+    Ok((StatusCode::OK, headers, Bytes::from(data)).into_response())
+}
+
+async fn play_recording(Path(filename): Path<String>) -> Result<Response, AppError> {
+    let filepath = PathBuf::from("images").join("recordings").join(&filename);
+
+    let data = tokio_fs::read(&filepath)
+        .await
+        .map_err(|_| AppError::from(anyhow::anyhow!("Recording not found")))?;
+
+    // 根据文件扩展名设置 Content-Type
+    let content_type = if filename.ends_with(".mp4") {
+        "video/mp4"
+    } else if filename.ends_with(".dav") {
+        "video/x-msvideo" // DAV 格式
+    } else {
+        "video/mp4" // 默认
+    };
+
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        axum::http::header::CONTENT_TYPE,
+        HeaderValue::from_str(content_type)?,
+    );
+    // 不设置 Content-Disposition，让浏览器直接播放而不是下载
 
     Ok((StatusCode::OK, headers, Bytes::from(data)).into_response())
 }
