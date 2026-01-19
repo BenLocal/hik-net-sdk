@@ -1,6 +1,6 @@
 use axum::{
     body::Bytes,
-    extract::{Path, Query, State},
+    extract::{Path, Query, Request, State},
     http::{HeaderMap, HeaderValue, StatusCode},
     response::{Html, IntoResponse, Json, Response},
     routing::{get, post},
@@ -399,28 +399,120 @@ async fn get_recording(Path(filename): Path<String>) -> Result<Response, AppErro
     Ok((StatusCode::OK, headers, Bytes::from(data)).into_response())
 }
 
-async fn play_recording(Path(filename): Path<String>) -> Result<Response, AppError> {
+async fn play_recording(
+    Path(filename): Path<String>,
+    request: Request,
+) -> Result<Response, AppError> {
+    let headers = request.headers();
     let filepath = PathBuf::from("images").join("recordings").join(&filename);
 
-    let data = tokio_fs::read(&filepath)
+    // 检查文件是否存在
+    let metadata = tokio_fs::metadata(&filepath)
         .await
         .map_err(|_| AppError::from(anyhow::anyhow!("Recording not found")))?;
+    let file_size = metadata.len();
 
     // 根据文件扩展名设置 Content-Type
     let content_type = if filename.ends_with(".mp4") {
         "video/mp4"
     } else if filename.ends_with(".dav") {
-        "video/x-msvideo" // DAV 格式
+        "video/x-msvideo" // DAV 格式（浏览器可能不支持，需要转码）
     } else {
         "video/mp4" // 默认
     };
 
-    let mut headers = HeaderMap::new();
-    headers.insert(
+    // 支持 Range 请求（用于视频流播放）
+    if let Some(range_header) = headers.get("range") {
+        if let Ok(range_str) = range_header.to_str() {
+            if let Some(range) = parse_range(range_str, file_size) {
+                let (start, end) = range;
+                let content_length = end - start + 1;
+
+                // 读取文件片段
+                let mut file = tokio::fs::File::open(&filepath)
+                    .await
+                    .map_err(|_| AppError::from(anyhow::anyhow!("Failed to open file")))?;
+                use tokio::io::{AsyncReadExt, AsyncSeekExt};
+                file.seek(std::io::SeekFrom::Start(start))
+                    .await
+                    .map_err(|e| AppError::from(anyhow::anyhow!("Seek error: {}", e)))?;
+
+                let mut buffer = vec![0u8; content_length as usize];
+                file.read_exact(&mut buffer)
+                    .await
+                    .map_err(|e| AppError::from(anyhow::anyhow!("Read error: {}", e)))?;
+
+                let mut response_headers = HeaderMap::new();
+                response_headers.insert(
+                    axum::http::header::CONTENT_TYPE,
+                    HeaderValue::from_str(content_type)?,
+                );
+                response_headers.insert(
+                    axum::http::header::CONTENT_RANGE,
+                    HeaderValue::from_str(&format!("bytes {}-{}/{}", start, end, file_size))?,
+                );
+                response_headers.insert(
+                    axum::http::header::CONTENT_LENGTH,
+                    HeaderValue::from_str(&content_length.to_string())?,
+                );
+                response_headers.insert(
+                    axum::http::header::ACCEPT_RANGES,
+                    HeaderValue::from_static("bytes"),
+                );
+
+                return Ok((
+                    StatusCode::PARTIAL_CONTENT,
+                    response_headers,
+                    Bytes::from(buffer),
+                )
+                    .into_response());
+            }
+        }
+    }
+
+    // 没有 Range 请求，返回整个文件
+    let data = tokio_fs::read(&filepath)
+        .await
+        .map_err(|_| AppError::from(anyhow::anyhow!("Recording not found")))?;
+
+    let mut response_headers = HeaderMap::new();
+    response_headers.insert(
         axum::http::header::CONTENT_TYPE,
         HeaderValue::from_str(content_type)?,
     );
-    // 不设置 Content-Disposition，让浏览器直接播放而不是下载
+    response_headers.insert(
+        axum::http::header::CONTENT_LENGTH,
+        HeaderValue::from_str(&file_size.to_string())?,
+    );
+    response_headers.insert(
+        axum::http::header::ACCEPT_RANGES,
+        HeaderValue::from_static("bytes"),
+    );
 
-    Ok((StatusCode::OK, headers, Bytes::from(data)).into_response())
+    Ok((StatusCode::OK, response_headers, Bytes::from(data)).into_response())
+}
+
+fn parse_range(range_header: &str, file_size: u64) -> Option<(u64, u64)> {
+    // 解析 Range: bytes=start-end 格式
+    if let Some(range) = range_header.strip_prefix("bytes=") {
+        let parts: Vec<&str> = range.split('-').collect();
+        if parts.len() == 2 {
+            let start = if parts[0].is_empty() {
+                0
+            } else {
+                parts[0].parse().ok()?
+            };
+
+            let end = if parts[1].is_empty() {
+                file_size - 1
+            } else {
+                parts[1].parse().ok()?
+            };
+
+            if start <= end && end < file_size {
+                return Some((start, end));
+            }
+        }
+    }
+    None
 }

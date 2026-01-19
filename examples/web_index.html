@@ -156,6 +156,18 @@
             opacity: 0.6;
         }
 
+        .channel-card.selected {
+            border-color: #667eea;
+            border-width: 2px;
+            background: #f0f4ff;
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+        }
+
+        .channel-card.selected .channel-number {
+            color: #667eea;
+            font-weight: bold;
+        }
+
         .channel-number {
             font-size: 1.2em;
             font-weight: bold;
@@ -300,43 +312,44 @@
             <h2>通道列表</h2>
             <div id="channelsMessage"></div>
             <button onclick="loadChannels()">刷新通道列表</button>
-            <div id="channelsList" class="channels-list"></div>
-        </div>
 
-        <!-- 图片查看区域 -->
-        <div class="section" id="imageSection" style="display: none;">
-            <h2>通道图片</h2>
-            <div id="imageMessage"></div>
-            <div class="form-group">
-                <label>通道号</label>
-                <input type="number" id="imageChannel" placeholder="1" min="1">
-            </div>
-            <button onclick="captureImage()">捕获图片</button>
-            <div id="imageContainer" class="image-container"></div>
-        </div>
+            <!-- 当前选中通道操作区域 -->
+            <div
+                style="margin-top: 20px; padding: 15px; background: white; border-radius: 5px; border: 2px solid #667eea;">
+                <div style="display: flex; align-items: flex-end; gap: 15px; margin-bottom: 15px; flex-wrap: wrap;">
+                    <div class="form-group" style="margin: 0; flex: 0 0 auto;">
+                        <label style="margin-bottom: 5px; display: block; font-weight: 500;">当前通道号</label>
+                        <input type="number" id="currentChannel" placeholder="1" min="1" style="width: 120px;">
+                    </div>
+                    <button onclick="captureImage()">捕获图片</button>
+                </div>
 
-        <!-- 录播下载区域 -->
-        <div class="section" id="downloadSection" style="display: none;">
-            <h2>录播资源下载</h2>
-            <div id="downloadMessage"></div>
-            <div class="form-group">
-                <label>通道号</label>
-                <input type="number" id="downloadChannel" placeholder="1" min="1">
-            </div>
-            <div class="form-row">
-                <div class="form-group">
-                    <label>开始时间 (YYYY-MM-DD HH:MM:SS)</label>
-                    <input type="text" id="startTime" placeholder="2024-01-01 00:00:00">
+                <!-- 图片显示区域 -->
+                <div id="imageContainer" class="image-container" style="margin-top: 15px;"></div>
+                <div id="imageMessage"></div>
+
+                <!-- 录播下载区域 -->
+                <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #ddd;">
+                    <h3 style="margin-bottom: 15px; color: #555; font-size: 1.1em;">录播资源下载</h3>
+                    <div id="downloadMessage"></div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>开始时间 (YYYY-MM-DD HH:MM:SS)</label>
+                            <input type="text" id="startTime" placeholder="2024-01-01 00:00:00">
+                        </div>
+                        <div class="form-group">
+                            <label>结束时间 (YYYY-MM-DD HH:MM:SS)</label>
+                            <input type="text" id="endTime" placeholder="2024-01-01 23:59:59">
+                        </div>
+                    </div>
+                    <div style="display: flex; gap: 10px;">
+                        <button onclick="downloadRecording()">开始下载</button>
+                        <!-- <button onclick="playRecording()" class="btn-secondary">开始播放</button> -->
+                    </div>
                 </div>
-                <div class="form-group">
-                    <label>结束时间 (YYYY-MM-DD HH:MM:SS)</label>
-                    <input type="text" id="endTime" placeholder="2024-01-01 23:59:59">
-                </div>
             </div>
-            <div style="display: flex; gap: 10px;">
-                <button onclick="downloadRecording()">开始下载</button>
-                <button onclick="playRecording()" class="btn-secondary">开始播放</button>
-            </div>
+
+            <div id="channelsList" class="channels-list" style="margin-top: 20px;"></div>
         </div>
     </div>
 
@@ -385,8 +398,6 @@
                     sessionId = data.session_id;
                     showMessage('loginMessage', '登录成功！', 'success');
                     document.getElementById('channelsSection').style.display = 'block';
-                    document.getElementById('imageSection').style.display = 'block';
-                    document.getElementById('downloadSection').style.display = 'block';
                     loadChannels();
                 } else {
                     showMessage('loginMessage', data.message, 'error');
@@ -424,6 +435,7 @@
             channels.forEach(channel => {
                 const card = document.createElement('div');
                 card.className = `channel-card ${channel.enabled ? 'enabled' : 'disabled'}`;
+                card.dataset.channelNum = channel.channel_num;
                 const ipAddressHtml = channel.ipv4_address
                     ? '<div class="channel-type">IP: ' + channel.ipv4_address + '</div>'
                     : '';
@@ -432,10 +444,43 @@
                     ipAddressHtml +
                     '<div class="channel-type">状态: ' + (channel.enabled ? '启用' : '禁用') + '</div>';
                 card.onclick = () => {
-                    document.getElementById('imageChannel').value = channel.channel_num;
-                    document.getElementById('downloadChannel').value = channel.channel_num;
+                    document.getElementById('currentChannel').value = channel.channel_num;
+                    updateChannelSelection(channel.channel_num);
                 };
                 container.appendChild(card);
+            });
+
+            // 监听通道号输入框变化
+            const currentChannelInput = document.getElementById('currentChannel');
+            if (currentChannelInput) {
+                currentChannelInput.addEventListener('input', function () {
+                    const channelNum = parseInt(this.value);
+                    if (channelNum) {
+                        updateChannelSelection(channelNum);
+                    } else {
+                        clearChannelSelection();
+                    }
+                });
+            }
+        }
+
+        function updateChannelSelection(channelNum) {
+            // 移除所有选中状态
+            clearChannelSelection();
+
+            // 添加当前选中状态
+            const cards = document.querySelectorAll('.channel-card');
+            cards.forEach(card => {
+                if (parseInt(card.dataset.channelNum) === channelNum) {
+                    card.classList.add('selected');
+                }
+            });
+        }
+
+        function clearChannelSelection() {
+            const cards = document.querySelectorAll('.channel-card');
+            cards.forEach(card => {
+                card.classList.remove('selected');
             });
         }
 
@@ -445,7 +490,7 @@
                 return;
             }
 
-            const channel = parseInt(document.getElementById('imageChannel').value);
+            const channel = parseInt(document.getElementById('currentChannel').value);
             if (!channel) {
                 showMessage('imageMessage', '请输入通道号', 'error');
                 return;
@@ -480,7 +525,7 @@
                 return;
             }
 
-            const channel = parseInt(document.getElementById('downloadChannel').value);
+            const channel = parseInt(document.getElementById('currentChannel').value);
             const startTime = document.getElementById('startTime').value;
             const endTime = document.getElementById('endTime').value;
 
@@ -521,7 +566,7 @@
                 return;
             }
 
-            const channel = parseInt(document.getElementById('downloadChannel').value);
+            const channel = parseInt(document.getElementById('currentChannel').value);
             const startTime = document.getElementById('startTime').value;
             const endTime = document.getElementById('endTime').value;
 
@@ -598,22 +643,64 @@
             videoLoading.style.display = 'block';
             videoLoading.textContent = '正在加载视频...';
             videoLoading.style.color = '#fff';
+
+            // 清除之前的事件监听器和源
+            videoPlayer.onloadeddata = null;
+            videoPlayer.onerror = null;
+            videoPlayer.oncanplay = null;
             videoPlayer.src = '';
-            videoPlayer.innerHTML = '<source src="/play/' + filename + '" type="video/mp4">' +
-                '<source src="/play/' + filename + '" type="video/x-msvideo">';
+
+            // 清空所有source标签
+            videoPlayer.innerHTML = '';
+
+            // 根据文件扩展名设置正确的类型
+            const videoUrl = '/play/' + encodeURIComponent(filename);
+            let videoType = 'video/mp4';
+
+            if (filename.endsWith('.dav')) {
+                videoType = 'video/x-msvideo';
+            } else if (filename.endsWith('.mp4')) {
+                videoType = 'video/mp4';
+            }
+
+            // 创建source元素并添加到video
+            const source = document.createElement('source');
+            source.src = videoUrl;
+            source.type = videoType;
+            videoPlayer.appendChild(source);
+
+            // 同时直接设置src作为备用
+            videoPlayer.src = videoUrl;
+
             modal.classList.add('show');
 
+            // 监听视频加载事件
             videoPlayer.onloadeddata = function () {
                 videoLoading.style.display = 'none';
                 videoPlayer.style.display = 'block';
             };
 
-            videoPlayer.onerror = function () {
-                videoLoading.textContent = '视频加载失败，请检查文件格式或稍后重试';
-                videoLoading.style.color = '#ff4444';
+            videoPlayer.oncanplay = function () {
+                videoLoading.style.display = 'none';
+                videoPlayer.style.display = 'block';
             };
 
+            videoPlayer.onerror = function (e) {
+                console.error('Video error:', e, videoPlayer.error);
+                videoLoading.style.display = 'block';
+                videoLoading.textContent = '视频加载失败。DAV格式需要转码为MP4，或请检查文件是否存在';
+                videoLoading.style.color = '#ff4444';
+                videoPlayer.style.display = 'none';
+            };
+
+            // 尝试加载视频
             videoPlayer.load();
+
+            // 尝试播放（如果浏览器支持）
+            videoPlayer.play().catch(function (error) {
+                console.error('Play error:', error);
+                videoLoading.textContent = '视频无法自动播放，请点击播放按钮';
+            });
         }
 
         function closeVideoModal() {
