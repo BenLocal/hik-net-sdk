@@ -1,7 +1,7 @@
 [package]
 name = "hik-net-sdk"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 
 [dependencies]
 anyhow = "1.0.98"
@@ -9,3 +9,13 @@ chrono = "0.4.30"
 
 [build-dependencies]
 bindgen = "0.72.1"
+
+[dev-dependencies]
+axum = "0.8"
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[[example]]
+name = "web_server"
+path = "examples/web_server.rs"

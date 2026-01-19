@@ -349,6 +349,14 @@ impl ChannelInfo {
     pub fn get_chan_num(&self) -> u16 {
         self.chan_num
     }
+
+    pub fn is_enabled(&self) -> bool {
+        self.enable
+    }
+
+    pub fn get_ipv4_address(&self) -> Option<&String> {
+        self.ipv4_address.as_ref()
+    }
 }
 
 pub struct HikDeviceInfo(NET_DVR_DEVICEINFO_V30);
